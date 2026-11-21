@@ -30,7 +30,6 @@ dependencies:
   record: ^7.0.0
   flutter_tts: ^4.2.5
   permission_handler: ^12.0.1
-  sherpa_onnx: ^2.0.2
   material_ui: ^1.11.1
   cupertino_ui: ^1.1.7
 
@@ -57,11 +56,6 @@ flutter:
     - assets/data/cebu_route_landmarks.json
     - assets/models/
     - assets/models/whisper/ggml-tiny-q5_1.bin
-    - assets/models/kws/keywords.txt
-    - assets/models/kws/tokens.txt
-    - assets/models/kws/encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx
-    - assets/models/kws/decoder-epoch-13-avg-2-chunk-16-left-64.onnx
-    - assets/models/kws/joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx
     - assets/glyphs/NotoSansRegular/
     - assets/glyphs/NotoSansMedium/
     - assets/glyphs/NotoSansItalic/

@@ -10,7 +10,6 @@ import '../services/assistant_command_parser.dart';
 import '../services/assistant_service.dart';
 import '../services/route_focus.dart';
 import '../services/route_planner.dart';
-import '../services/wake_word_service.dart';
 import '../models/route.dart';
 import 'cebu_boundary_layer.dart' show kCebuHome;
 import 'cebu_map_view.dart';
@@ -125,10 +124,6 @@ class _HomePageState extends State<HomePage>
   Timer? _captureTimer;
   String _lastAssistantResponse = '';
 
-  /// Delays the wake-word start until the splash is gone, so a permission
-  /// prompt for a previously enabled wake word does not land on it.
-  Timer? _wakeStartTimer;
-
   @override
   void initState() {
     super.initState();
@@ -137,7 +132,6 @@ class _HomePageState extends State<HomePage>
     widget.rebuildStyleKey.addListener(_onRebuildStyleKey);
     widget.locateRequest.addListener(_onLocateRequest);
     RouteFocus.pending.addListener(_onPendingRoute);
-    WakeWordService.instance.onWake = _onWakeWord;
     _loadAssistantPref();
     // The scanner can announce a route while this page is off-screen, and the
     // tab PageView disposes pages it is not showing. Consume anything left over
@@ -155,16 +149,6 @@ class _HomePageState extends State<HomePage>
         prefs.getBool(AssistantService.assistantPrefKey) ?? false;
     setState(() => _assistantEnabled = enabled);
     if (enabled) unawaited(_warmAssistant());
-
-    // The wake word is an Assistant feature: only restore it when the
-    // Assistant itself is on. The mic permission prompt is deliberately
-    // delayed past the splash for a choice saved in an earlier session.
-    if (enabled && await WakeWordService.instance.restore()) {
-      _wakeStartTimer?.cancel();
-      _wakeStartTimer = Timer(const Duration(seconds: 4), () {
-        unawaited(WakeWordService.instance.start(askPermission: true));
-      });
-    }
   }
 
   /// One AssistantService per Home page, wired with the real route codes.
@@ -199,9 +183,6 @@ class _HomePageState extends State<HomePage>
   @override
   void dispose() {
     _captureTimer?.cancel();
-    _wakeStartTimer?.cancel();
-    WakeWordService.instance.onWake = null;
-    unawaited(WakeWordService.instance.suspend());
     unawaited(_assistant?.dispose());
     _location.removeListener(_onLocationChanged);
     _location.dispose();
@@ -283,28 +264,14 @@ class _HomePageState extends State<HomePage>
     );
   }
 
-  /// Opens the Assistant mic. [announce] is set when the wake word triggered
-  /// it: the user gets a spoken "Listening" before the capture starts.
-  Future<void> _startListening({bool announce = false}) async {
-    if (_assistantBusy || _listening) return;
+  Future<void> _startListening() async {
+    if (_assistantBusy) return;
     setState(() => _assistantBusy = true);
-    // The wake word holds the mic while armed; a second `record` instance
-    // cannot open it. Release it before the Assistant asks for it.
-    await WakeWordService.instance.suspend();
-    var started = false;
     try {
       final assistant = _ensureAssistant();
       if (!await assistant.prepare()) {
         _assistantRespond('Assistant files failed to load.');
         return;
-      }
-      if (announce) {
-        if (mounted) {
-          ScaffoldMessenger.of(context)
-            ..hideCurrentSnackBar()
-            ..showSnackBar(const SnackBar(content: Text('Listening')));
-        }
-        await assistant.speak('Listening');
       }
       // Auto-stop ends capture when the user stops talking, so no second
       // tap is needed; the button stays available to stop early.
@@ -318,26 +285,12 @@ class _HomePageState extends State<HomePage>
       HapticFeedback.mediumImpact();
       if (mounted) setState(() => _listening = true);
       _captureTimer = Timer(AssistantService.maxCapture, _stopListening);
-      started = true;
     } catch (error) {
       debugPrint('Assistant start failed: $error');
       _assistantRespond('Sorry, the assistant could not start.');
     } finally {
       if (mounted) setState(() => _assistantBusy = false);
-      // Nothing captured: hand the mic back to the wake word.
-      if (!started) unawaited(WakeWordService.instance.resume());
     }
-  }
-
-  /// The spotter heard "SeeRuta". It has already released the mic; greet the
-  /// user out loud and start the Assistant capture.
-  Future<void> _onWakeWord() async {
-    if (!mounted || !_assistantEnabled || _assistantBusy || _listening) {
-      unawaited(WakeWordService.instance.resume());
-      return;
-    }
-    HapticFeedback.mediumImpact();
-    await _startListening(announce: true);
   }
 
   Future<void> _stopListening() async {
@@ -356,9 +309,6 @@ class _HomePageState extends State<HomePage>
       _assistantRespond('Sorry, I could not process that.');
     } finally {
       if (mounted) setState(() => _assistantBusy = false);
-      // Re-arm the wake word only after the response has been spoken, so the
-      // spotter cannot hear the Assistant's own voice.
-      unawaited(WakeWordService.instance.resume());
     }
   }
 

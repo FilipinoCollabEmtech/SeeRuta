@@ -32,15 +32,6 @@ android {
         versionName = flutter.versionName
     }
 
-    // flutter_onnxruntime (OCR) and sherpa_onnx (wake word) each ship an
-    // `libonnxruntime.so`. Both are ONNX Runtime 1.28, so keep one copy
-    // instead of failing the native-lib merge on the duplicate path.
-    packaging {
-        jniLibs {
-            pickFirsts += "**/libonnxruntime.so"
-        }
-    }
-
     signingConfigs {
         create("release") {
             if (hasReleaseSigning) {
