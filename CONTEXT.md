@@ -1,6 +1,10 @@
 # Project Context: flutter-widget-catalog / SeeRuta offline vector map
 
-Last updated: 2026-11-22 (design libraries moved out of the SDK: every app
+Last updated: 2026-11-22 (wake word "SeeRuta": sherpa-onnx keyword spotting
+in `lib/services/wake_word_service.dart` with a 5.5 MB phone-keyword model in
+`assets/models/kws/`, opt-in via Settings > Accessibility; on detection it
+speaks "Listening" and starts the existing Assistant capture. Same day,
+before that: design libraries moved out of the SDK: every app
 import of `package:flutter/material.dart` now uses
 `package:material_ui/material_ui.dart` (`cupertino_ui` for the Cupertino
 usage in `demo_gallery.dart`), with `MaterialUiCompatibilityBridge` in
@@ -510,6 +514,17 @@ Declared in `pubspec.yaml`:
   (32,152,673 bytes, bundled whisper model; pubspec entry added because
   Flutter asset dirs are non-recursive, so `assets/models/` does not cover
   the subfolder).
+- `sherpa_onnx: ^2.0.2` (NEW 2026-11-22 — on-device keyword spotting for the
+  wake word only; resolved **2.0.2**, which also pulls the per-platform
+  federated packages `sherpa_onnx_android_arm64` etc. into the pub cache.
+  The ASR is still whisper_ggml; sherpa's ASR split remains rejected for size.
+  Android ships `libonnxruntime.so` from both this plugin and
+  `flutter_onnxruntime`, so `android/app/build.gradle.kts` has
+  `packaging.jniLibs.pickFirsts += "**/libonnxruntime.so"` (both are ONNX
+  Runtime 1.28.x, so either copy satisfies both callers). Wake model assets:
+  `assets/models/kws/` — encoder int8 4,599,656 B, decoder 759,829 B, joiner
+  int8 86,629 B, `tokens.txt` 1,928 B, `keywords.txt` 27 B (declared
+  individually in `pubspec.yaml`; 5.5 MB total).
 - `material_ui: ^1.11.1` and `cupertino_ui: ^1.1.7` (NEW 2026-11-22 — the
   Material/Cupertino design libraries were extracted from the SDK into pub
   packages and are deprecated in-framework from Flutter 3.50. All app code
@@ -879,12 +894,15 @@ Assistant behavior shipped yet beyond Phase 0 below):
 - **Fully offline is a research requirement.** Platform speech services are
   NOT relied on (Android's recognizer is only offline when the user happened
   to pre-download language packs).
-- **Wake word:** openWakeWord "SeeRuta" models run via
-  `flutter_onnxruntime` (already in pubspec and already used by
-  `ppocr_ocr.dart`, so the native runtime cost is already in the APK);
-  ~4 MB of ONNX models. Alternative rejected: `porcupine_flutter` (fast to
-  train but requires an AccessKey and free-tier limits unsuited to a
-  publicly distributed app).
+- **Wake word (superseded 2026-11-22, shipped differently):** the original
+  design was an openWakeWord "SeeRuta" model on `flutter_onnxruntime` (already
+  in pubspec via `ppocr_ocr.dart`). That requires training a custom
+  openWakeWord model, so the user instead asked for sherpa-onnx KWS; the
+  shipped implementation is `sherpa_onnx` 2.0.2 + the bilingual zipformer KWS
+  model with phone-level English keywords (`S IY1 R UW1 T AH0`), 5.5 MB of
+  assets. `porcupine_flutter` remains rejected (AccessKey plus free-tier
+  limits unsuited to a publicly distributed app). See the wake word section
+  at the end of this file.
 - **ASR (changed 2026-11-18, verified against real model sizes):**
   `whisper_ggml` ^2.10.0 (whisper.cpp v1.9.5 core, MIT) with the bundled
   `ggml-tiny-q5_1.bin` (~31 MB, md5 531c3bec8666a67ed7f0c0779c58fd61,
@@ -1532,3 +1550,63 @@ Supersedes the "pages are never rebuilt" bullet above.
   3.44 Material copy, so small visual differences are possible), and the
   analyze result on Flutter 3.50.1 itself — that only gets proven by the next
   CI run.
+
+## Wake word "SeeRuta" (2026-11-22)
+
+- Purpose: say "SeeRuta" anywhere in the app (while it is in the foreground)
+  and the Assistant opens by itself: the phone speaks **"Listening"**, shows a
+  "Listening" SnackBar, and starts the normal one-shot whisper capture. The
+  spoken word never appears in the confirmation (the spotter would hear it).
+- Engine: `lib/services/wake_word_service.dart`, one app-wide singleton.
+  `record` 7.x captures 16 kHz mono PCM16 from Android's `voiceRecognition`
+  source; each chunk is converted to float32 and fed to a sherpa-onnx
+  streaming `KeywordSpotter` (zipformer transducer, int8, `numThreads: 1`).
+  Nothing runs in an isolate: one decode step costs a few ms for this 3M
+  model, measured ~11x realtime on the Linux laptop. It is NOT whisper —
+  continuous whisper decoding would keep the CPU busy and drain the battery.
+- Flow: detection -> mic released -> `onWake` -> `HomePage._startListening(
+  announce: true)` speaks "Listening" through TTS and opens the Assistant
+  recorder. The wake word is suspended while the Assistant records (two
+  `record` instances cannot own the mic) and re-armed in `_stopListening`'s
+  `finally`, after the answer has been spoken. Manual mic taps and the wake
+  word share the same code path.
+- Settings: second switch in Accessibility, "Wake word 'SeeRuta'", disabled
+  until "SeeRuta Assistant" is on; turning the Assistant off disables and
+  clears the wake word. Persisted as `seeRutaWakeWordEnabled`
+  (`WakeWordService.prefKey`). Turning it on is where the microphone
+  permission is requested (`permission_handler`), and a refusal rolls the
+  switch back so it never claims to be on while dead. If a saved choice is
+  restored but the permission is missing, `HomePage` starts it 4 s after boot
+  (past the 3 s splash) so the prompt is not drawn over the loading screen.
+- Lifecycle: suspended on `paused`/`hidden`/`detached` (no background mic),
+  resumed on `resumed` without re-prompting. If Android ends the stream on its
+  own (audio focus, route loss), it retries after 2 s, giving up after 3
+  consecutive failures. A generation counter cancels a start whose mic was
+  taken away mid-open.
+- Model: `assets/models/kws/` = sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
+  (`chunk-16`, int8 encoder/joiner, fp32 decoder, 5.5 MB total, Apache 2.0).
+  `keywords.txt` uses phonemes from the model's `en.phone` lexicon:
+  `S IY1 R UW1 T AH0 @SeeRuta` ("see-roo-ta"). Tuning: append `:score` and/or
+  `#threshold` to the line (defaults 1.0 / 0.25) — see the README beside the
+  assets. `en.phone` itself is not bundled; the keyword line is pre-generated.
+- Why this model: the English-only GigaSpeech KWS model is BPE-based and did
+  not detect "SeeRuta" in testing; its `-mobile` export also crashes inside
+  ONNX Runtime 2.0.2 (`/downsample` reshape, input 17 frames vs requested 16),
+  while the non-mobile export loads. The bilingual model lets the keyword be
+  spelled as phones, which is what makes an invented word work.
+- Build: `sherpa_onnx` and `flutter_onnxruntime` both ship
+  `lib/arm64-v8a/libonnxruntime.so`; `android/app/build.gradle.kts` now has
+  `packaging { jniLibs { pickFirsts += "**/libonnxruntime.so" } }`. Both
+  libraries are ONNX Runtime 1.28.x, so either copy serves both. `pub get`
+  also refreshed `linux/flutter/generated_plugins.cmake` and the Windows one
+  (sherpa registers FFI plugins there); those are tracked files.
+- Verification (no device, no local APK build): a throwaway `dart` script
+  using the Linux sherpa native libs loaded the exact bundled asset files and
+  detected natural TTS "SeeRuta" and "See Ruta" (2 detections in a 3.5 s clip)
+  and the control keyword LIGHT_UP on the model's human wav, with 0 detections
+  across 23 s of unrelated human speech. `flutter analyze` = no issues;
+  `flutter test test/wake_word_test.dart` = 2/2 (PCM16 -> float32 endianness
+  and odd trailing byte); `flutter test test/widget_test.dart` passes with the
+  new Home wiring. NOT verified: real-phone mic capture, detection from real
+  voices (Cebuano accent, distance, street noise), battery cost of the
+  foreground-only mic, and the Android APK build with the ORT pickFirst.
