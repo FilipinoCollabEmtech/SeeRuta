@@ -74,7 +74,6 @@ jobs:
           path: |
             android/.cxx
             android/app/.cxx
-            build/
           key: native-build-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'android/**/*.gradle*', 'android/**/*.kts') }}
           restore-keys: |
             native-build-${{ runner.os }}-
