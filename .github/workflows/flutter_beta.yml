@@ -68,6 +68,17 @@ jobs:
           path: /usr/local/lib/android/sdk/ndk/29.0.13113456
           key: android-ndk-29.0.13113456
 
+      - name: Cache native build intermediates
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/.cxx
+            android/app/.cxx
+            build/
+          key: native-build-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'android/**/*.gradle*', 'android/**/*.kts') }}
+          restore-keys: |
+            native-build-${{ runner.os }}-
+
       - name: Accept Android SDK licenses
         run: |
           SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
